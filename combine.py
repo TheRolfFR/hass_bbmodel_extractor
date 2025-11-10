@@ -11,6 +11,28 @@ import requests
 import shutil
 import time
 
+# 📢 MODIFY VALUES HERE AS NECESSARY
+HOME_ASSISTANT_URL = "http://homeassistant.local:8123"
+
+FILAMENT_NUMBER_REGEX = r"; filament: ([\d,]+)"
+FILAMENT_NUMBER_SEP = ","
+
+FILAMENT_COST_VAR = "input_number.3d_current_cost"
+FILAMENT_COST_REGEX = r"; filament_cost = ([\d\.,]+)"
+FILAMENT_COST_SEP = ","
+
+FILAMENT_WEIGHT_VAR = "input_number.3d_current_weight"
+FILAMENT_WEIGHT_REGEX = r"; total filament weight \[g\] : ([\d\.,]+)"
+FILAMENT_WEIGHT_SEP = ","
+
+FILAMENT_LENGTH_VAR = "input_number.3d_current_length"
+FILAMENT_LENGTH_REGEX = r"; total filament length \[mm\] : ([\d\.,]+)"
+FILAMENT_LENGTH_SEP = ","
+
+FILAMENT_TYPE_VAR = "input_text.3d_current_type"
+FILAMENT_TYPE_REGEX = r"; filament_type = ([a-zA-Z;]+)"
+FILAMENT_TYPE_SEP = ";"
+
 # * Logger
 file_handler = logging.FileHandler(Path(__file__).with_suffix(".log"))
 stdout_handler = logging.StreamHandler(sys.stdout)
@@ -21,6 +43,19 @@ logging.basicConfig(
     handlers=handlers,
 )
 logger = logging.Logger(Path(__file__).stem)
+
+
+def read_env(path=Path(__file__).parent / ".env"):
+    pairlist = []
+    with open(path, "r") as envfile:
+        lines = filter(lambda l: l, envfile.readlines())
+        pairlist = map(lambda l: list(map(lambda v: v.strip(), l.split("="))), lines)
+
+    for key, value in pairlist:
+        os.environ[key] = value.strip("'\"")
+
+
+print(read_env())
 
 
 class ImplicitFTP_TLS(ftplib.FTP_TLS):
@@ -139,7 +174,10 @@ def extract_image_and_gcode(model_path, extract_path="www/bblab"):
                     # Check for the G-code and image file
                     if file.lower().endswith(".gcode"):
                         gcode_file = file_path
-                    elif file.lower() == "plate_1.png":
+                        possible_image_file = Path(gcode_file).with_suffix(".png")
+                        if os.path.isfile(possible_image_file):
+                            image_file = str(possible_image_file)
+                    elif not image_file and file.lower() == "plate_1.png":
                         image_file = file_path
 
             # Now delete all files except the G-code and image files
@@ -189,51 +227,85 @@ def extract_filament_data(gcode_file_path):
     Extract filament data (weight, cost, length, type) from a G-code file and
     print it out (or update Home Assistant helpers as needed).
     """
-    filament_cost = None
-    filament_weight = None
-    filament_length = None
+    filament_index_list = []
+    filament_cost_list = []
+    filament_weight_list = []
+    filament_length_list = []
     filament_type = None
 
     with open(gcode_file_path, "r") as file:
         content = file.read()
 
-        cost_match = re.search(r"; filament cost = ([\d\.]+)", content)
+        filament_number_match = re.search(FILAMENT_NUMBER_REGEX, content)
+        if filament_number_match:
+            filament_index_list = filament_number_match.group(1).split(
+                FILAMENT_NUMBER_SEP
+            )
+            filament_index_list = list(map(lambda n: int(n) - 1, filament_index_list))
+
+        cost_match = re.search(FILAMENT_COST_REGEX, content)
         if cost_match:
-            filament_cost = cost_match.group(1)
+            all_filament_cost_list = cost_match.group(1).split(FILAMENT_COST_SEP)
+            all_filament_cost_list = list(
+                map(lambda n: float(n), all_filament_cost_list)
+            )
+            filament_cost_list = list(
+                map(
+                    lambda f_index: all_filament_cost_list[f_index], filament_index_list
+                )
+            )
 
-        weight_match = re.search(r"; filament used \[g\] = ([\d\.]+)", content)
+        weight_match = re.search(FILAMENT_WEIGHT_REGEX, content)
         if weight_match:
-            filament_weight = weight_match.group(1)
+            filament_weight_list = weight_match.group(1).split(FILAMENT_WEIGHT_SEP)
+            filament_weight_list = list(map(lambda n: float(n), filament_weight_list))
 
-        length_match = re.search(r"; filament used \[mm\] = ([\d\.]+)", content)
+        length_match = re.search(FILAMENT_LENGTH_REGEX, content)
         if length_match:
-            filament_length = length_match.group(1)
+            filament_length_list = length_match.group(1).split(FILAMENT_LENGTH_SEP)
+            filament_length_list = list(
+                map(lambda n: float(n) / 1000, filament_length_list)
+            )
 
-        type_match = re.search(r"; filament_type = (.+)", content)
+        type_match = re.search(FILAMENT_TYPE_REGEX, content)
         if type_match:
-            filament_type = type_match.group(1)
+            filament_type_list = type_match.group(1).split(FILAMENT_TYPE_SEP)
+            filament_type = filament_type_list[
+                filament_index_list[0]
+            ]  # Always same type of filament thought the print
+
+    logging.debug("filament_number_list: " + pformat(filament_index_list))
+    logging.debug("filament_cost_list: " + pformat(filament_cost_list))
+    logging.debug("filament_weight_list: " + pformat(filament_weight_list))
+    logging.debug("filament_length_list: " + pformat(filament_length_list))
+
+    filament_cost = sum(
+        map(lambda e: e[0] / 1000 * e[1], zip(filament_weight_list, filament_cost_list))
+    )
+    filament_weight = sum(filament_weight_list)
+    filament_length = sum(filament_length_list)
 
     if filament_cost:
-        logging.debug(f"{filament_cost}")
-        update_home_assistant_helper("input_number.3d_current_cost", filament_cost)
+        logging.debug(f"filament_cost: {filament_cost} currency")
+        update_home_assistant_helper(FILAMENT_COST_VAR, filament_cost)
     else:
         logger.error(f"filament_cost not found")
 
     if filament_weight:
-        logging.debug(f"{filament_weight}")
-        update_home_assistant_helper("input_number.3d_current_weight", filament_weight)
+        logging.debug(f"filament_weight: {filament_weight} g")
+        update_home_assistant_helper(FILAMENT_WEIGHT_VAR, filament_weight)
     else:
         logger.error(f"filament_weight not found")
 
     if filament_length:
-        logging.debug(f"{filament_length}")
-        update_home_assistant_helper("input_number.3d_current_length", filament_length)
+        logging.debug(f"filament_length: {filament_length} m")
+        update_home_assistant_helper(FILAMENT_LENGTH_VAR, filament_length)
     else:
         logger.error(f"filament_length not found")
 
     if filament_type:
-        logging.debug(f"{filament_type}")
-        update_home_assistant_helper("input_text.3d_current_type", filament_type)
+        logging.debug(f"filament_type: {filament_type}")
+        update_home_assistant_helper(FILAMENT_TYPE_VAR, filament_type)
     else:
         logger.error(f"filament_type not found")
 
@@ -242,9 +314,9 @@ def update_home_assistant_helper(helper_name, value):
     """
     Update Home Assistant input helper while preserving metadata.
     """
-    url = f"http://homeassistant.local:8123/api/states/{helper_name}"
+    url = f"{HOME_ASSISTANT_URL}/api/states/{helper_name}"
     headers = {
-        "Authorization": "Bearer <PLACE_TOKEN_HERE>",
+        "Authorization": "Bearer " + os.environ["BEARER_TOKEN"],
         "Content-Type": "application/json",
     }
 
