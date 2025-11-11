@@ -81,7 +81,13 @@ class ImplicitFTP_TLS(ftplib.FTP_TLS):
         self._sock = value
 
 
-def download_model(host, access_code, model, download_path="."):
+def download_model(host, access_code, model, download_path=".") -> str:
+    """
+    Searches and downloads `model` to `download_path`
+
+	Returns:
+        Local downloaded file path
+    """
     download_path = os.path.abspath(download_path)
     os.makedirs(download_path, exist_ok=True)
     local_file_path = os.path.join(download_path, model)
@@ -117,7 +123,7 @@ def download_model(host, access_code, model, download_path="."):
                 ftp.quit()
                 return
         else:
-            logging.error(f"File {model} found in root directory.")
+            logging.debug(f"File {model} found in root directory.")
 
         # Download file
         with open(local_file_path, "wb") as fp:
@@ -135,6 +141,9 @@ def download_model(host, access_code, model, download_path="."):
 
     except Exception as e:
         logging.error(f"FTP download failed: {e}")
+        logging.exception(e)
+
+    return local_file_path
 
 
 def extract_image_and_gcode(model_path, extract_path="www/bblab"):
@@ -223,11 +232,15 @@ def extract_image_and_gcode(model_path, extract_path="www/bblab"):
                 logging.error("Error: plate_1.png not found in the 3MF archive.")
 
         # Remove the original .3mf file
-        os.remove(model_path)
-        logging.debug(f"Deleted the .3mf file: {model_path}")
+        if os.path.isfile(model_path):
+            os.remove(model_path)
+            logging.debug(f"Deleted the .3mf file: {model_path}")
+        else:
+            logging.debug(f"Already deleted the .3mf file: {model_path}")
 
     except Exception as e:
         logging.error(f"An error occurred: {e}")
+        logging.exception(e)
 
 
 def extract_filament_data(gcode_file_path):
@@ -346,6 +359,7 @@ def update_home_assistant_helper(helper_name, value):
 
     except requests.exceptions.RequestException as e:
         logging.error(f"Failed to update {helper_name}: {e}")
+        logging.exception(e)
 
 
 def main():
@@ -356,14 +370,14 @@ def main():
         access_code = sys.argv[2]
         model_name = sys.argv[3]
 
-        download_model(
+        local_model_path = download_model(
             host=printer_ip,
             access_code=access_code,
             model=model_name,
             download_path="www/bblab",
         )
 
-        extract_image_and_gcode(f"www/bblab/{model_name}", extract_path="www/bblab")
+        extract_image_and_gcode(local_model_path, extract_path="www/bblab")
 
 
 if __name__ == "__main__":
