@@ -85,6 +85,7 @@ def download_model(host, access_code, model, download_path="."):
     download_path = os.path.abspath(download_path)
     os.makedirs(download_path, exist_ok=True)
     local_file_path = os.path.join(download_path, model)
+    task_file = f"{model}.gcode.3mf"
 
     try:
         ftp = ImplicitFTP_TLS()
@@ -97,13 +98,20 @@ def download_model(host, access_code, model, download_path="."):
         logging.debug("Files on FTP Server:")
         logging.debug(pformat(available_files))  # Debugging line
 
+        # Check if similar filename exists
+        if task_file in available_files:
+            logging.debug(f"File task '{task_file}' found in root!")
+            model = task_file
         # Check if the exact filename exists
-        if model not in available_files:
+        if (model not in available_files) or (task_file not in available_files):
             logging.debug(
                 f"File {model} not found in root. Checking cache/ directory..."
             )
             ftp.cwd("cache")
             available_files = ftp.nlst()
+            if task_file in available_files:
+                logging.debug(f"File task '{task_file}' found in cache!")
+                model = task_file
             if model not in available_files:
                 logging.error(f"Error: File {model} not found on FTP server!")
                 ftp.quit()
@@ -142,11 +150,11 @@ def extract_image_and_gcode(model_path, extract_path="www/bblab"):
     time.sleep(2)  # Ensure the file is fully downloaded before processing
 
     if not os.path.exists(model_path):
-        logger.error(f"Error: File {model_path} does not exist!")
+        logging.error(f"Error: File {model_path} does not exist!")
         return
 
     if not zipfile.is_zipfile(model_path):
-        logger.error(f"Error: {model_path} is not a valid 3MF (ZIP) file.")
+        logging.error(f"Error: {model_path} is not a valid 3MF (ZIP) file.")
         return
 
     try:
@@ -187,7 +195,7 @@ def extract_image_and_gcode(model_path, extract_path="www/bblab"):
                         os.remove(file_path)
                         logging.debug(f"Deleted extra file: {file_path}")
                     except Exception as e:
-                        logger.error(f"Error deleting file {file_path}: {e}")
+                        logging.error(f"Error deleting file {file_path}: {e}")
 
             # Delete empty directories (and non-empty if they don't contain the needed files)
             for root, dirs, files in os.walk(extract_path, topdown=False):
@@ -205,21 +213,21 @@ def extract_image_and_gcode(model_path, extract_path="www/bblab"):
                 logging.debug(f"Extracted real G-code: {final_gcode_path}")
                 extract_filament_data(final_gcode_path)
             else:
-                logger.error("Error: No valid G-code file found after extraction.")
+                logging.error("Error: No valid G-code file found after extraction.")
 
             final_image_path = os.path.join(extract_path, "cover_image.png")
             if image_file:
                 shutil.move(image_file, final_image_path)
                 logging.debug(f"Extracted image to {final_image_path}")
             else:
-                logger.error("Error: plate_1.png not found in the 3MF archive.")
+                logging.error("Error: plate_1.png not found in the 3MF archive.")
 
         # Remove the original .3mf file
         os.remove(model_path)
         logging.debug(f"Deleted the .3mf file: {model_path}")
 
     except Exception as e:
-        logger.error(f"An error occurred: {e}")
+        logging.error(f"An error occurred: {e}")
 
 
 def extract_filament_data(gcode_file_path):
@@ -289,25 +297,25 @@ def extract_filament_data(gcode_file_path):
         logging.debug(f"filament_cost: {filament_cost} currency")
         update_home_assistant_helper(FILAMENT_COST_VAR, filament_cost)
     else:
-        logger.error(f"filament_cost not found")
+        logging.error(f"filament_cost not found")
 
     if filament_weight:
         logging.debug(f"filament_weight: {filament_weight} g")
         update_home_assistant_helper(FILAMENT_WEIGHT_VAR, filament_weight)
     else:
-        logger.error(f"filament_weight not found")
+        logging.error(f"filament_weight not found")
 
     if filament_length:
         logging.debug(f"filament_length: {filament_length} m")
         update_home_assistant_helper(FILAMENT_LENGTH_VAR, filament_length)
     else:
-        logger.error(f"filament_length not found")
+        logging.error(f"filament_length not found")
 
     if filament_type:
         logging.debug(f"filament_type: {filament_type}")
         update_home_assistant_helper(FILAMENT_TYPE_VAR, filament_type)
     else:
-        logger.error(f"filament_type not found")
+        logging.error(f"filament_type not found")
 
 
 def update_home_assistant_helper(helper_name, value):
@@ -337,12 +345,12 @@ def update_home_assistant_helper(helper_name, value):
         logging.debug(f"Successfully updated {helper_name} with value: {value}")
 
     except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to update {helper_name}: {e}")
+        logging.error(f"Failed to update {helper_name}: {e}")
 
 
 def main():
     if len(sys.argv) < 4:
-        logger.error("Host, access code, and model name required")
+        logging.error("Host, access code, and model name required")
     else:
         printer_ip = sys.argv[1]
         access_code = sys.argv[2]
